@@ -17,11 +17,11 @@
     "commands": [
       {
         "command": "codeshare.toggleServer",
-        "title": "Iniciar ou parar Codeshare"
+        "title": "Start or Stop Codeshare"
       },
       {
         "command": "codeshare.openBrowser",
-        "title": "Abrir navegador"
+        "title": "Launch Codeshare in browser"
       }
     ]
   },
