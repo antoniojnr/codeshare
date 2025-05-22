@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Espelho de Código</title>
+    <link rel="stylesheet" href="github-dark.css" />
+    <style>
+      body {
+        background: #0d1117;
+        color: #c9d1d9;
+        font-family: monospace;
+        margin: 0;
+        display: flex;
+        height: 100vh;
+      }
+      .sidebar {
+        width: 250px;
+        background-color: #161b22;
+        border-right: 1px solid #30363d;
+        padding: 1em;
+        overflow-y: auto;
+      }
+      .sidebar h2 {
+        font-size: 1em;
+        margin-top: 0;
+      }
+      .sidebar ul {
+        list-style: none;
+        padding-left: 0;
+      }
+      .sidebar li {
+        cursor: pointer;
+        padding: 6px 8px;
+        border-radius: 4px;
+      }
+      .sidebar li:hover,
+      .sidebar li.active {
+        background-color: #238636;
+        color: white;
+      }
+      .main {
+        flex: 1;
+        padding: 1.5em;
+        display: flex;
+        flex-direction: column;
+      }
+      h1 {
+        font-size: 1.2em;
+        margin-bottom: 0.5em;
+      }
+      .toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5em;
+      }
+      button {
+        background-color: #238636;
+        border: none;
+        color: white;
+        padding: 6px 12px;
+        font-size: 0.9em;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #2ea043;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        font-size: 16px;
+        margin: 0;
+        border: 1px solid #30363d;
+        padding: 1em;
+        border-radius: 6px;
+        background: #161b22;
+        flex: 1;
+        overflow: auto;
+      }
+      .hljs-ln-numbers {
+        text-align: right;
+        color: #555;
+        border-right: 1px solid #444;
+        padding-right: 30px;
+        user-select: none;
+      }
+      .hljs-ln-code {
+        padding-left: 10px;
+      }
+      .hljs-selected-line {
+        background-color: #434343;
+        /* outline: 1px solid #3fb950; */
+      }
+      table.hljs-ln td.hljs-ln-numbers {
+        padding-right: 5px;
+      }
+      table.hljs-ln td.hljs-ln-code {
+        padding-top: 3px;
+        padding-left: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sidebar">
+      <h2>Arquivos</h2>
+      <ul id="file-list">
+        <li>Nenhum arquivo</li>
+      </ul>
+    </div>
+    <div class="main">
+      <div class="toolbar">
+        <h1 id="file-name">Nenhum arquivo salvo</h1>
+        <button id="copy-btn">Copiar código</button>
+      </div>
+      <pre id="code-container">
+      <code class="language-plaintext">// aguardando código salvo...</code>
+    </pre>
+    </div>
+
+    <script src="highlight.min.js"></script>
+    <script src="highlightjs-line-numbers.min.js"></script>
+    <script>
+      const fileList = document.getElementById("file-list");
+      const pre = document.getElementById("code-container");
+      const fileNameEl = document.getElementById("file-name");
+      const copyBtn = document.getElementById("copy-btn");
+
+      const files = new Map();
+      let currentCode = "";
+      let activeFilename = "";
+
+      const socket = new WebSocket(`ws://${location.host}`);
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const { type, filename, content, language } = data;
+
+          if (type === "open") {
+            files.set(filename, { language, code: content });
+            updateFileList();
+            if (activeFilename === "" || activeFilename === filename) {
+              showFile(filename);
+            }
+          }
+
+          if (type === "close") {
+            files.delete(filename);
+            if (filename === activeFilename) {
+              activeFilename = "";
+              fileNameEl.textContent = "Nenhum arquivo salvo";
+              pre.innerHTML = `<code class="language-plaintext">// aguardando código salvo...</code>`;
+            }
+            updateFileList();
+          }
+
+          if (type === "selection") {
+            const file = files.get(data.filename);
+
+            // Ignore se o conteúdo ainda não chegou
+            if (!file || !file.code) {
+              return;
+            }
+
+            files.set(data.filename, {
+              ...file,
+              selectedLines: data.selectedLines,
+            });
+
+            if (activeFilename === data.filename) {
+              showFile(data.filename);
+            }
+
+            updateFileList();
+          }
+
+          if (data.type === "content") {
+            const file = files.get(data.filename) || {};
+            files.set(data.filename, {
+              ...file,
+              code: data.content,
+              language: data.language,
+            });
+            updateFileList();
+            showFile(data.filename);
+          }
+        } catch (err) {
+          console.error("Erro ao processar payload:", err);
+        }
+      };
+
+      function updateFileList() {
+        fileList.innerHTML = "";
+        for (const [filename] of files.entries()) {
+          const li = document.createElement("li");
+          li.textContent = filename;
+          li.className = filename === activeFilename ? "active" : "";
+          li.onclick = () => showFile(filename);
+          fileList.appendChild(li);
+        }
+      }
+
+      function showFile(filename) {
+        const data = files.get(filename);
+        if (!data) return;
+
+        activeFilename = filename;
+        updateFileList();
+
+        const { language, code } = data;
+        fileNameEl.textContent = filename;
+        currentCode = code;
+
+        const newCodeEl = document.createElement("code");
+        newCodeEl.className = `language-${language}`;
+        newCodeEl.textContent = code;
+
+        pre.innerHTML = "";
+        pre.appendChild(newCodeEl);
+        hljs.highlightElement(newCodeEl);
+        hljs.lineNumbersBlock(newCodeEl);
+
+        if (data.selectedLines) {
+          requestAnimationFrame(() => {
+            const lineElements = pre.querySelectorAll(".hljs-ln-code");
+            if (lineElements.length === 0) {
+              console.warn("Nenhuma linha encontrada para destacar.");
+              return;
+            }
+
+            // Limpa destaques anteriores
+            lineElements.forEach((tr) =>
+              tr.classList.remove("hljs-selected-line")
+            );
+
+            // Aplica destaque nas linhas selecionadas
+            if (Array.isArray(data.selectedLines)) {
+              data.selectedLines.forEach((lineNum) => {
+                const tr = lineElements[lineNum - 1]; // linhas são baseadas em 1
+                if (tr) tr.classList.add("hljs-selected-line");
+              });
+            }
+          });
+        }
+      }
+
+      copyBtn.addEventListener("click", () => {
+        navigator.clipboard
+          .writeText(currentCode)
+          .then(() => alert("Código copiado!"))
+          .catch((err) => alert("Erro ao copiar: " + err));
+      });
+    </script>
+  </body>
+</html>
