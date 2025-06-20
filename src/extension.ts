@@ -5,6 +5,7 @@ import {
   stopServer,
   isServerRunning,
   getLocalIPAddress,
+  onReceiveMessage,
 } from "./server";
 import WebSocket from "ws";
 
@@ -22,9 +23,14 @@ export function activate(context: vscode.ExtensionContext) {
         stopServer();
         broadcast = undefined;
       } else {
-        // startWebSocketConnection();
         const server = startServer(3000);
         broadcast = server.broadcast;
+        onReceiveMessage((msg) => {
+          const data = JSON.parse(msg);
+          if (data.type === "request_sync") {
+            sendAllOpenFiles();
+          }
+        });
         vscode.env.openExternal(vscode.Uri.parse(`http://${server.ip}:3000`));
       }
       updateStatusBar();
@@ -67,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
       };
 
       if (broadcast) broadcast(JSON.stringify(message));
-    }, 300); // espera 300ms sem digitação
+    }, 400);
   });
 
   vscode.window.onDidChangeTextEditorSelection((event) => {
@@ -82,20 +88,14 @@ export function activate(context: vscode.ExtensionContext) {
       selectedLines.push(i + 1); // linhas são baseadas em 1 no HTML
     }
 
+    const selectedText = document.getText(selection);
+
     const message = {
       type: "selection",
       filename,
       selectedLines,
+      selectedText,
     };
-
-    // Envia via WebSocket (VS Code -> navegador)
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try {
-        ws.send(JSON.stringify(message));
-      } catch (err) {
-        console.error("Erro ao enviar via WebSocket:", err);
-      }
-    }
 
     // Envia via broadcast (VS Code -> servidor local (server.ts) que repassa ao navegador)
     if (broadcast) {
@@ -120,16 +120,6 @@ export function activate(context: vscode.ExtensionContext) {
       language: document.languageId,
     };
 
-    // Envia via WebSocket (VS Code -> navegador)
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      try {
-        ws.send(JSON.stringify(message));
-      } catch (err) {
-        console.error("Erro ao enviar via WebSocket:", err);
-      }
-    }
-
-    // Envia via broadcast (VS Code -> servidor local (server.ts) que repassa ao navegador)
     if (broadcast) {
       broadcast(JSON.stringify(message));
       console.log(`[Codeshare] Enviado via servidor HTTP: ${message.filename}`);
@@ -158,36 +148,21 @@ function sendFile(document: vscode.TextDocument) {
   const content = document.getText();
   const language = document.languageId;
 
-  const message = {
-    filename,
-    content,
-    language,
-  };
-
-  // Envia via WebSocket (VS Code -> navegador)
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.send(JSON.stringify(message));
-      console.log(`[Codeshare] Enviado via WebSocket: ${filename}`);
-    } catch (err) {
-      console.error("Erro ao enviar via WebSocket:", err);
-    }
-  }
-
-  // Envia via broadcast (VS Code → servidor local que repassa ao navegador)
   if (broadcast) {
     const fallbackMessage = {
       language,
       content,
       type: "open",
-      filename: path.basename(document.fileName),
+      filename,
     };
     broadcast(JSON.stringify(fallbackMessage));
-    console.log(`[Codeshare] Enviado via servidor HTTP: ${filename}`);
+    console.log(
+      `[Codeshare] Enviado via servidor HTTP: ${filename} ${fallbackMessage.filename}`
+    );
   }
 }
 
-function sendAllOpenFiles(ws: WebSocket) {
+function sendAllOpenFiles() {
   const docs = vscode.workspace.textDocuments.filter(
     (doc) => !doc.isUntitled && !doc.isClosed
   );
@@ -195,30 +170,6 @@ function sendAllOpenFiles(ws: WebSocket) {
   for (const doc of docs) {
     sendFile(doc);
   }
-}
-
-function startWebSocketConnection() {
-  ws = new WebSocket("ws://localhost:3000");
-
-  ws.onopen = () => {
-    console.log("✅ WebSocket conectado.");
-    vscode.window.showInformationMessage("Codeshare conectado!");
-
-    if (ws) sendAllOpenFiles(ws);
-  };
-
-  ws.onmessage = (event) => {
-    console.log("📨 Mensagem recebida:", event.data);
-  };
-
-  ws.onerror = (error) => {
-    console.error("🚨 Erro no WebSocket:", error);
-    vscode.window.showErrorMessage("Erro ao conectar ao Codeshare WebSocket.");
-  };
-
-  ws.onclose = () => {
-    console.warn("🔌 WebSocket desconectado.");
-  };
 }
 
 function updateStatusBar() {

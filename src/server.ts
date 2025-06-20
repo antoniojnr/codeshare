@@ -10,6 +10,32 @@ let server: http.Server | null = null;
 let wss: ws.Server | null = null;
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
 
+export function onReceiveMessage(callback: (msg: string) => void) {
+  if (!wss) {
+    return;
+  }
+
+  wss.on("connection", (socket) => {
+    socket.on("message", (msg, isBinary) => {
+      let text: string;
+      if (isBinary) {
+        if (msg instanceof Buffer) {
+          text = msg.toString();
+        } else if (msg instanceof ArrayBuffer) {
+          text = Buffer.from(msg).toString();
+        } else if (Array.isArray(msg)) {
+          text = Buffer.concat(msg).toString();
+        } else {
+          text = "";
+        }
+      } else {
+        text = msg.toString();
+      }
+      callback(text);
+    });
+  });
+}
+
 function broadcast(text: string) {
   if (!wss) {
     return;
@@ -18,20 +44,6 @@ function broadcast(text: string) {
   wss.clients.forEach(
     (client: ws.WebSocket) =>
       client.readyState === ws.WebSocket.OPEN && client.send(text)
-  );
-}
-
-function broadcastFile(fileData: {
-  filename: string;
-  content: string;
-  language: string;
-}) {
-  const json = JSON.stringify(fileData);
-
-  if (!wss) return;
-  wss.clients.forEach(
-    (client: ws.WebSocket) =>
-      client.readyState === ws.WebSocket.OPEN && client.send(json)
   );
 }
 
