@@ -3,7 +3,6 @@
   <head>
     <meta charset="UTF-8" />
     <title>Codeshare</title>
-    <link rel="stylesheet" href="github-dark.css" />
     <style>
       body {
         background: #0d1117;
@@ -66,42 +65,12 @@
       button:hover {
         background-color: #2ea043;
       }
-      pre {
-        white-space: pre-wrap;
-        word-wrap: break-word;
-        font-size: 16px;
-        margin: 0;
-        border: 1px solid #30363d;
-        padding: 1em;
-        border-radius: 6px;
-        background: #161b22;
+
+      /* Estilos para o Ace Editor */
+      #editor {
         flex: 1;
-        overflow: auto;
-      }
-      .hljs-ln-numbers {
-        text-align: right;
-        color: #555;
-        border-right: 1px solid #444;
-        padding-right: 30px;
-        user-select: none;
-      }
-      .hljs-ln-code {
-        padding-left: 10px;
-      }
-      .hljs-selected-line {
-        background-color: #434343;
-        /* outline: 1px solid #3fb950; */
-      }
-      table.hljs-ln td.hljs-ln-numbers {
-        padding-right: 5px;
-      }
-      table.hljs-ln td.hljs-ln-code {
-        padding-top: 3px;
-        padding-left: 5px;
-      }
-      .highlight {
-        background-color: yellow;
-        font-weight: bold;
+        height: 100%;
+        border-radius: 6px;
       }
     </style>
   </head>
@@ -117,24 +86,31 @@
         <h1 id="file-name">Nenhum arquivo salvo</h1>
         <button id="copy-btn">Copiar código</button>
       </div>
-      <pre id="code-container">
-      <code class="language-plaintext">// aguardando código salvo...</code>
-    </pre>
+      <div id="editor">// aguardando código salvo...</div>
     </div>
 
-    <script src="highlight.min.js"></script>
-    <script src="highlightjs-line-numbers.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.12/ext-modelist.js"></script>
+
     <script>
       const fileList = document.getElementById("file-list");
-      const pre = document.getElementById("code-container");
       const fileNameEl = document.getElementById("file-name");
       const copyBtn = document.getElementById("copy-btn");
 
       const files = new Map();
-      let currentCode = "";
       let activeFilename = "";
 
       const socket = new WebSocket(`ws://${location.host}`);
+
+      // Configuração do Ace Editor
+      const editor = ace.edit("editor");
+      editor.setTheme("ace/theme/tomorrow_night_eighties"); // Ou "monokai", "github", etc.
+      editor.setOptions({
+        fontSize: "16px",
+        readOnly: true, // O código não pode ser editado no navegador
+      });
+
+      const modelist = ace.require("ace/ext/modelist");
 
       socket.onopen = () => {
         socket.send(JSON.stringify({ type: "request_sync" }));
@@ -145,46 +121,16 @@
           const data = JSON.parse(event.data);
           const { type, filename, content, language } = data;
 
-          if (type === "open") {
-            files.set(filename, { language, code: content });
+          if (type === "open" || type === "content") {
+            files.set(filename, {
+              language,
+              code: content,
+            });
             updateFileList();
             if (activeFilename === "" || activeFilename === filename) {
               showFile(filename);
             }
-          }
-
-          if (type === "close") {
-            files.delete(filename);
-            if (filename === activeFilename) {
-              activeFilename = "";
-              fileNameEl.textContent = "Nenhum arquivo salvo";
-              pre.innerHTML = `<code class="language-plaintext">// aguardando código salvo...</code>`;
-            }
-            updateFileList();
-          }
-
-          if (type === "selection") {
-            const file = files.get(data.filename);
-
-            // Ignore se o conteúdo ainda não chegou
-            if (!file || !file.code) {
-              return;
-            }
-
-            files.set(data.filename, {
-              ...file,
-              selectedLines: data.selectedLines,
-              selectedText: data.selectedText,
-            });
-
-            if (activeFilename === data.filename) {
-              showFile(data.filename);
-            }
-
-            updateFileList();
-          }
-
-          if (data.type === "content") {
+          } else if (type === "patch") {
             const file = files.get(data.filename) || {};
             files.set(data.filename, {
               ...file,
@@ -193,11 +139,38 @@
             });
             updateFileList();
             showFile(data.filename);
+          } else if (type === "selection") {
+            if (
+              data.selection.start.row === data.selection.end.row &&
+              data.selection.start.col === data.selection.end.col
+            )
+              return;
+            if (activeFilename === filename) {
+              selectText(
+                data.selection.start.row,
+                data.selection.start.col,
+                data.selection.end.row,
+                data.selection.end.col
+              );
+            }
+          } else if (type === "close") {
+            files.delete(filename);
+            if (filename === activeFilename) {
+              activeFilename = "";
+              fileNameEl.textContent = "Nenhum arquivo salvo";
+              editor.setValue("// aguardando código salvo...", -1);
+            }
+            updateFileList();
           }
         } catch (err) {
           console.error("Erro ao processar payload:", err);
         }
       };
+
+      function selectText(startRow, startColumn, endRow, endColumn) {
+        const range = new ace.Range(startRow, startColumn, endRow, endColumn);
+        editor.getSelection().setSelectionRange(range);
+      }
 
       function updateFileList() {
         fileList.innerHTML = "";
@@ -217,53 +190,22 @@
         activeFilename = filename;
         updateFileList();
 
-        const { language, code } = data;
         fileNameEl.textContent = filename;
-        currentCode = code;
 
-        const newCodeEl = document.createElement("code");
-        newCodeEl.className = `language-${language}`;
-        newCodeEl.textContent = code;
-
-        pre.innerHTML = "";
-        pre.appendChild(newCodeEl);
-        hljs.highlightElement(newCodeEl);
-        hljs.lineNumbersBlock(newCodeEl);
-
-        if (data.selectedLines) {
-          requestAnimationFrame(() => {
-            const lineElements = pre.querySelectorAll(".hljs-ln-code");
-            if (lineElements.length === 0) {
-              console.warn("Nenhuma linha encontrada para destacar.");
-              return;
-            }
-
-            // Limpa destaques anteriores
-            lineElements.forEach((tr) =>
-              tr.classList.remove("hljs-selected-line")
-            );
-
-            // Aplica destaque nas linhas selecionadas
-            if (Array.isArray(data.selectedLines)) {
-              data.selectedLines.forEach((lineNum) => {
-                const tr = lineElements[lineNum - 1]; // linhas são baseadas em 1
-                if (tr) tr.classList.add("hljs-selected-line");
-              });
-            }
-          });
-        }
+        const mode = modelist.getModeForPath(filename).mode;
+        editor.session.setMode(mode);
+        editor.setValue(data.code, -1);
       }
 
       function copiarCodigo() {
         if (navigator.clipboard && navigator.clipboard.writeText) {
           navigator.clipboard
-            .writeText(currentCode)
+            .writeText(editor.getValue())
             .then(() => alert("Código copiado."))
             .catch((err) => alert("Erro ao copiar: " + err));
         } else {
-          // Fallback para navegadores sem suporte
           const textarea = document.createElement("textarea");
-          textarea.value = currentCode;
+          textarea.value = editor.getValue();
           document.body.appendChild(textarea);
           textarea.select();
           try {

@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import * as path from "path";
+import * as jsdiff from "diff";
 import {
   startServer,
   stopServer,
@@ -12,6 +12,7 @@ import WebSocket from "ws";
 let statusControl: vscode.StatusBarItem;
 let broadcast: ((code: string) => void) | undefined;
 let ws: WebSocket | null = null;
+const lastBroadcastedContent = new Map<string, string>();
 
 export function activate(context: vscode.ExtensionContext) {
   console.log("[Codeshare] executando.");
@@ -65,14 +66,23 @@ export function activate(context: vscode.ExtensionContext) {
 
     updateTimeout = setTimeout(() => {
       const document = event.document;
+      const filename = vscode.workspace.asRelativePath(document.uri);
+      const newContent = document.getText();
+      const oldContent = lastBroadcastedContent.get(filename) || "";
+
+      const diffs = jsdiff.diffChars(oldContent, newContent);
+
       const message = {
-        type: "content",
+        type: "patch",
         filename: vscode.workspace.asRelativePath(document.uri),
         content: document.getText(),
+        diffs,
         language: document.languageId,
       };
 
       if (broadcast) broadcast(JSON.stringify(message));
+
+      lastBroadcastedContent.set(filename, newContent);
     }, 400);
   });
 
@@ -83,18 +93,19 @@ export function activate(context: vscode.ExtensionContext) {
 
     const filename = vscode.workspace.asRelativePath(document.uri);
 
-    const selectedLines = [];
-    for (let i = selection.start.line; i <= selection.end.line; i++) {
-      selectedLines.push(i + 1); // linhas são baseadas em 1 no HTML
-    }
-
-    const selectedText = document.getText(selection);
-
     const message = {
       type: "selection",
       filename,
-      selectedLines,
-      selectedText,
+      selection: {
+        start: {
+          row: selection.start.line,
+          col: selection.start.character,
+        },
+        end: {
+          row: selection.end.line,
+          col: selection.end.character,
+        },
+      },
     };
 
     // Envia via broadcast (VS Code -> servidor local (server.ts) que repassa ao navegador)
@@ -134,7 +145,6 @@ export function activate(context: vscode.ExtensionContext) {
       filename: vscode.workspace.asRelativePath(document.uri),
     };
     if (ws && ws.readyState === WebSocket.OPEN) {
-      console.log("[Codeshare] Avisei que o documento foi fechado.");
       ws.send(JSON.stringify(message));
     }
     if (broadcast) {
@@ -179,6 +189,7 @@ function updateStatusBar() {
     statusControl.tooltip = "Clique para parar o Codeshare";
     statusControl.color = "#4CAF50";
   } else {
+    statusControl.color = "#000000";
     statusControl.text = `$(debug-start) Iniciar Codeshare`;
     statusControl.tooltip = "Clique para iniciar o Codeshare";
   }
